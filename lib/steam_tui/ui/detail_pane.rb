@@ -27,7 +27,7 @@ module SteamTui
         lines << @pastel.bold(truncate("  #{game.name}", width))
         lines << ""
         lines << "  AppID:    #{game.appid}"
-        lines << "  Playtime: #{game.playtime_hours}h"
+        lines << "  Playtime: #{game.playtime_display}"
         lines << ""
         lines << @pastel.dim("  Family ownership:")
 

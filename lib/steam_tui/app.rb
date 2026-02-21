@@ -28,7 +28,9 @@ module SteamTui
       # UI state
       @cursor_pos      = 0          # index into flat_list
       @expanded_genres = Set.new    # which genre names are expanded
+      @flat_list       = []         # cached result of build_flat_list
       @search_query    = nil        # nil = not searching; "" = active, empty
+      @prev_search_query = nil      # previous query for incremental search
       @filtered_games  = nil        # nil = not searching; Array<Game> = results
       @selected_game   = nil        # Models::Game currently shown in detail pane
 
@@ -65,13 +67,18 @@ module SteamTui
       print_loading("Fetching player names…")
       names = client.fetch_player_summaries(all_ids)
 
-      @family_members = all_ids.map.with_index do |sid, idx|
+      print_loading("Fetching family libraries…")
+      threads = all_ids.each_with_index.map do |sid, idx|
         persona = names[sid.to_s] || "Member #{idx + 1}"
-        print_loading("Fetching library for #{persona}…")
-        client.build_family_member(steamid: sid, persona_name: persona)
+        Thread.new { client.build_family_member(steamid: sid, persona_name: persona) }
       end
+      @family_members = threads.map(&:value)
 
       @genre_tree = build_genre_tree(@games)
+    end
+
+    def rebuild_flat_list
+      @flat_list = @tree_pane ? @tree_pane.build_flat_list : []
     end
 
     def build_genre_tree(games)
@@ -93,6 +100,7 @@ module SteamTui
         family_members: @family_members,
         pastel:         @pastel
       )
+      rebuild_flat_list
     end
 
     # ── Event loop ────────────────────────────────────────────────────────────
@@ -124,25 +132,23 @@ module SteamTui
     end
 
     def handle_nav_input(key_name, char)
-      flat = @tree_pane.build_flat_list
-
       # Special keys (arrows, Enter) — key_name is a Symbol
       case key_name
-      when :up    then move_cursor(-1, flat)
-      when :down  then move_cursor(1, flat)
+      when :up    then move_cursor(-1, @flat_list)
+      when :down  then move_cursor(1, @flat_list)
       when :right, :return
-        expand_or_select(flat)
+        expand_or_select
       when :left
-        collapse(flat)
+        collapse
       end
 
       # Character keys — event.key.name is :alpha for ALL lowercase letters;
       # the actual character is only available in event.value (char).
       case char
-      when "k" then move_cursor(-1, flat)
-      when "j" then move_cursor(1, flat)
-      when "l" then expand_or_select(flat)
-      when "h" then collapse(flat)
+      when "k" then move_cursor(-1, @flat_list)
+      when "j" then move_cursor(1, @flat_list)
+      when "l" then expand_or_select
+      when "h" then collapse
       when "/" then enter_search_mode
       when "q" then @quit = true
       end
@@ -173,19 +179,23 @@ module SteamTui
       end
     end
 
-    def expand_or_select(flat)
-      item = flat[@cursor_pos]
+    def expand_or_select
+      item = @flat_list[@cursor_pos]
       if item&.dig(:type) == :genre
         @expanded_genres.add(item[:genre])
+        rebuild_flat_list
       elsif item&.dig(:type) == :game
         @selected_game = item[:game]
       end
     end
 
-    def collapse(flat)
-      item  = flat[@cursor_pos]
+    def collapse
+      item  = @flat_list[@cursor_pos]
       genre = item&.dig(:genre) || item&.dig(:parent_genre)
-      @expanded_genres.delete(genre) if genre
+      if genre
+        @expanded_genres.delete(genre)
+        rebuild_flat_list
+      end
     end
 
     def move_cursor(delta, list)
@@ -200,26 +210,38 @@ module SteamTui
     end
 
     def exit_search_mode
-      @search_query   = nil
-      @filtered_games = nil
-      @cursor_pos     = 0
+      @search_query      = nil
+      @prev_search_query = nil
+      @filtered_games    = nil
+      @cursor_pos        = 0
     end
 
     def update_search_results
       if @search_query.empty?
-        @filtered_games = []
-        @cursor_pos     = 0
+        @prev_search_query = @search_query
+        @filtered_games    = []
+        @cursor_pos        = 0
         return
       end
 
       q = @search_query.downcase
 
+      # If the query is an extension of the previous one, narrow within the
+      # existing results (result set can only shrink as the query grows).
+      # Otherwise re-scan the full library.
+      prev = @prev_search_query&.downcase || ""
+      search_pool = if !prev.empty? && q.start_with?(prev) && @filtered_games
+                      @filtered_games
+                    else
+                      @games
+                    end
+
       # Pass 1 — substring: query appears literally anywhere in the name
-      substring = @games.select { |g| g.name.downcase.include?(q) }
+      substring = search_pool.select { |g| g.name.downcase.include?(q) }
 
       # Pass 2 — subsequence: every character appears in order (fzf-style)
       # e.g. "hlf" matches "Half-Life" but not "Lethal Company"
-      subsequence = @games.select do |g|
+      subsequence = search_pool.select do |g|
         next false if substring.include?(g)
         name = g.name.downcase
         pos  = 0
@@ -230,8 +252,9 @@ module SteamTui
         end
       end
 
-      @filtered_games = substring + subsequence
-      @cursor_pos = 0
+      @prev_search_query = @search_query
+      @filtered_games    = substring + subsequence
+      @cursor_pos        = 0
     end
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -246,7 +269,7 @@ module SteamTui
       output << "\e[H"   # move cursor to top-left (home)
 
       # Search bar (1 line)
-      output << @search_bar.render(query: @search_query, width: width)
+      output << @search_bar.render(query: @search_query, width: width, result_count: @filtered_games&.length)
       output << "\n"
 
       # Panes take remaining height minus header + status line
@@ -259,7 +282,8 @@ module SteamTui
         width:           left_width,
         cursor_pos:      @cursor_pos,
         search_mode:     !@search_query.nil?,
-        filtered_games:  @filtered_games
+        filtered_games:  @filtered_games,
+        flat_list:       @flat_list
       )
 
       right_lines = @detail_pane.render(
