@@ -28,11 +28,11 @@ module SteamTui
       end
 
       # Returns Array<String> of rendered lines (exactly `height` lines).
-      def render(height:, width:, cursor_pos:, search_mode:, filtered_games:)
+      def render(height:, width:, cursor_pos:, search_mode:, filtered_games:, flat_list: nil)
         lines = if search_mode
                   render_search(filtered_games, cursor_pos, width)
                 else
-                  render_tree(cursor_pos, width)
+                  render_tree(cursor_pos, width, flat_list || build_flat_list)
                 end
 
         # Pad or truncate to exact height
@@ -43,8 +43,7 @@ module SteamTui
 
       private
 
-      def render_tree(cursor_pos, width)
-        flat  = build_flat_list
+      def render_tree(cursor_pos, width, flat)
         lines = []
 
         flat.each.with_index do |item, idx|
