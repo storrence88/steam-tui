@@ -18,6 +18,16 @@ module SteamTui
       def primary_genre
         genres.first || "Uncategorized"
       end
+
+      # Public CDN URLs — no authentication required.
+      # Portrait capsule (600×900) is preferred; header (460×215) is the fallback.
+      def artwork_url
+        "https://cdn.cloudflare.steamstatic.com/steam/apps/#{appid}/library_600x900.jpg"
+      end
+
+      def header_url
+        "https://cdn.cloudflare.steamstatic.com/steam/apps/#{appid}/header.jpg"
+      end
     end
   end
 end

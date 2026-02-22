@@ -5,6 +5,7 @@ GEM
     csv (3.3.5)
     dotenv (3.2.0)
     fuzzy_match (2.1.0)
+    imgcat (0.1.0)
     httparty (0.24.2)
       csv
       mini_mime (>= 1.0.0)
@@ -42,6 +43,7 @@ DEPENDENCIES
   dotenv
   fuzzy_match
   httparty
+  imgcat
   pastel
   tty-box
   tty-cursor
