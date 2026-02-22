@@ -10,3 +10,7 @@ gem "pastel"
 gem "fuzzy_match"
 gem "httparty"
 gem "dotenv"
+
+# Optional: inline image rendering fallback when chafa is not installed.
+# Supports iTerm2, WezTerm, VSCode, and mintty via OSC 1337.
+gem "imgcat", require: false

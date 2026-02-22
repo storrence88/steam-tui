@@ -12,6 +12,8 @@ require "steam_tui/models/family_member"
 require "steam_tui/ui/search_bar"
 require "steam_tui/ui/tree_pane"
 require "steam_tui/ui/detail_pane"
+require "steam_tui/services/artwork_cache"
+require "steam_tui/services/image_renderer"
 
 module SteamTui
   class App
@@ -33,6 +35,12 @@ module SteamTui
       @prev_search_query = nil      # previous query for incremental search
       @filtered_games  = nil        # nil = not searching; Array<Game> = results
       @selected_game   = nil        # Models::Game currently shown in detail pane
+
+      # Artwork state
+      @artwork_cache    = Services::ArtworkCache.new
+      @artwork_renderer = Services::ImageRenderer.new
+      @artwork_lines    = nil   # Array<String> once rendered, nil while loading
+      @artwork_thread   = nil   # background Thread fetching/rendering artwork
 
       # Sub-panes (instantiated after data loads so they receive state refs)
       @tree_pane   = nil
@@ -164,7 +172,7 @@ module SteamTui
       when :return
         # select highlighted filtered game
         if @filtered_games&.any?
-          @selected_game = @filtered_games[@cursor_pos]
+          select_game(@filtered_games[@cursor_pos])
           exit_search_mode
         end
       when :up
@@ -185,7 +193,7 @@ module SteamTui
         @expanded_genres.add(item[:genre])
         rebuild_flat_list
       elsif item&.dig(:type) == :game
-        @selected_game = item[:game]
+        select_game(item[:game])
       end
     end
 
@@ -196,6 +204,38 @@ module SteamTui
         @expanded_genres.delete(genre)
         rebuild_flat_list
       end
+    end
+
+    def select_game(game)
+      @selected_game = game
+      load_artwork_async(game)
+    end
+
+    def load_artwork_async(game)
+      return unless Services::ImageRenderer.available?
+
+      # Cancel any in-flight fetch for the previous game.
+      @artwork_thread&.kill
+      @artwork_lines  = nil
+      @artwork_thread = Thread.new do
+        path = @artwork_cache.fetch(game)
+        if path
+          lines = @artwork_renderer.render(path, width: artwork_width, height: artwork_height)
+          @artwork_lines = lines
+          render   # trigger a redraw now that artwork is ready
+        end
+      end
+    end
+
+    # Target size: fill the right pane width, cap height to ~one-third of screen.
+    def artwork_width
+      width      = TTY::Screen.width
+      left_width = (width * 0.35).to_i
+      width - left_width - 1
+    end
+
+    def artwork_height
+      [TTY::Screen.height / 3, 10].max
     end
 
     def move_cursor(delta, list)
@@ -214,6 +254,7 @@ module SteamTui
       @prev_search_query = nil
       @filtered_games    = nil
       @cursor_pos        = 0
+      # Keep @selected_game and @artwork_lines — the user can see the game they picked.
     end
 
     def update_search_results
@@ -287,9 +328,10 @@ module SteamTui
       )
 
       right_lines = @detail_pane.render(
-        height: pane_height,
-        width:  right_width,
-        game:   @selected_game
+        height:        pane_height,
+        width:         right_width,
+        game:          @selected_game,
+        artwork_lines: @artwork_lines
       )
 
       pane_height.times do |i|

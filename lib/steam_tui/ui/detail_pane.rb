@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "steam_tui/services/image_renderer"
+
 module SteamTui
   module Ui
     class DetailPane
@@ -9,8 +11,9 @@ module SteamTui
       end
 
       # Returns Array<String> of rendered lines (exactly `height` lines).
-      def render(height:, width:, game:)
-        lines = game ? render_game(game, width) : render_empty(width)
+      # `artwork_lines` is an Array<String> produced by ImageRenderer, or nil.
+      def render(height:, width:, game:, artwork_lines: nil)
+        lines = game ? render_game(game, width, artwork_lines) : render_empty(width)
 
         lines = lines.first(height)
         lines += [""] * [height - lines.length, 0].max
@@ -19,11 +22,20 @@ module SteamTui
 
       private
 
-      def render_game(game, width)
+      def render_game(game, width, artwork_lines)
         owners = @family_members.select { |m| m.owns?(game.appid) }
         total  = @family_members.length
 
         lines = []
+
+        if artwork_lines
+          lines.concat(artwork_lines)
+          lines << ""
+        elsif Services::ImageRenderer.available?
+          lines << @pastel.dim("  Loading artwork…")
+          lines << ""
+        end
+
         lines << @pastel.bold(truncate("  #{game.name}", width))
         lines << ""
         lines << "  AppID:    #{game.appid}"
